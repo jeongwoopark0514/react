@@ -21,18 +21,21 @@ import {
 import AutoSizer from 'react-virtualized-auto-sizer';
 import {FixedSizeList} from 'react-window';
 import {TreeDispatcherContext, TreeStateContext} from './TreeContext';
+import Icon from '../Icon';
 import {SettingsContext} from '../Settings/SettingsContext';
-import {BridgeContext, StoreContext} from '../context';
-import ElementView from './Element';
+import {BridgeContext, StoreContext, OptionsContext} from '../context';
+import Element from './Element';
 import InspectHostNodesToggle from './InspectHostNodesToggle';
 import OwnersStack from './OwnersStack';
-import SearchInput from './SearchInput';
+import ComponentSearchInput from './ComponentSearchInput';
 import SettingsModalContextToggle from 'react-devtools-shared/src/devtools/views/Settings/SettingsModalContextToggle';
 import SelectedTreeHighlight from './SelectedTreeHighlight';
 import TreeFocusedContext from './TreeFocusedContext';
-import {useHighlightNativeElement} from '../hooks';
-
+import {useHighlightNativeElement, useSubscription} from '../hooks';
+import {clearErrorsAndWarnings as clearErrorsAndWarningsAPI} from 'react-devtools-shared/src/backendAPI';
 import styles from './Tree.css';
+import ButtonIcon from '../ButtonIcon';
+import Button from '../Button';
 
 // Never indent more than this number of pixels (even if we have the room).
 const DEFAULT_INDENTATION_SIZE = 12;
@@ -59,6 +62,7 @@ export default function Tree(props: Props) {
   } = useContext(TreeStateContext);
   const bridge = useContext(BridgeContext);
   const store = useContext(StoreContext);
+  const {hideSettings} = useContext(OptionsContext);
   const [isNavigatingWithKeyboard, setIsNavigatingWithKeyboard] = useState(
     false,
   );
@@ -71,7 +75,7 @@ export default function Tree(props: Props) {
 
   const [treeFocused, setTreeFocused] = useState<boolean>(false);
 
-  const {lineHeight} = useContext(SettingsContext);
+  const {lineHeight, showInlineWarningsAndErrors} = useContext(SettingsContext);
 
   // Make sure a newly selected element is visible in the list.
   // This is helpful for things like the owners list and search.
@@ -301,6 +305,33 @@ export default function Tree(props: Props) {
     [store],
   );
 
+  const handlePreviousErrorOrWarningClick = React.useCallback(() => {
+    dispatch({type: 'SELECT_PREVIOUS_ELEMENT_WITH_ERROR_OR_WARNING_IN_TREE'});
+  }, []);
+
+  const handleNextErrorOrWarningClick = React.useCallback(() => {
+    dispatch({type: 'SELECT_NEXT_ELEMENT_WITH_ERROR_OR_WARNING_IN_TREE'});
+  }, []);
+
+  const errorsOrWarningsSubscription = useMemo(
+    () => ({
+      getCurrentValue: () => ({
+        errors: store.errorCount,
+        warnings: store.warningCount,
+      }),
+      subscribe: (callback: Function) => {
+        store.addListener('mutated', callback);
+        return () => store.removeListener('mutated', callback);
+      },
+    }),
+    [store],
+  );
+  const {errors, warnings} = useSubscription(errorsOrWarningsSubscription);
+
+  const clearErrorsAndWarnings = () => {
+    clearErrorsAndWarningsAPI({bridge, store});
+  };
+
   return (
     <TreeFocusedContext.Provider value={treeFocused}>
       <div className={styles.Tree} ref={treeRef}>
@@ -312,10 +343,48 @@ export default function Tree(props: Props) {
             </Fragment>
           )}
           <Suspense fallback={<Loading />}>
-            {ownerID !== null ? <OwnersStack /> : <SearchInput />}
+            {ownerID !== null ? <OwnersStack /> : <ComponentSearchInput />}
           </Suspense>
-          <div className={styles.VRule} />
-          <SettingsModalContextToggle />
+          {showInlineWarningsAndErrors &&
+            ownerID === null &&
+            (errors > 0 || warnings > 0) && (
+              <React.Fragment>
+                <div className={styles.VRule} />
+                {errors > 0 && (
+                  <div className={styles.IconAndCount}>
+                    <Icon className={styles.ErrorIcon} type="error" />
+                    {errors}
+                  </div>
+                )}
+                {warnings > 0 && (
+                  <div className={styles.IconAndCount}>
+                    <Icon className={styles.WarningIcon} type="warning" />
+                    {warnings}
+                  </div>
+                )}
+                <Button
+                  onClick={handlePreviousErrorOrWarningClick}
+                  title="Scroll to previous error or warning">
+                  <ButtonIcon type="up" />
+                </Button>
+                <Button
+                  onClick={handleNextErrorOrWarningClick}
+                  title="Scroll to next error or warning">
+                  <ButtonIcon type="down" />
+                </Button>
+                <Button
+                  onClick={clearErrorsAndWarnings}
+                  title="Clear all errors and warnings">
+                  <ButtonIcon type="clear" />
+                </Button>
+              </React.Fragment>
+            )}
+          {!hideSettings && (
+            <Fragment>
+              <div className={styles.VRule} />
+              <SettingsModalContextToggle />
+            </Fragment>
+          )}
         </div>
         <div
           className={styles.AutoSizerWrapper}
@@ -339,7 +408,7 @@ export default function Tree(props: Props) {
                 itemSize={lineHeight}
                 ref={listCallbackRef}
                 width={width}>
-                {ElementView}
+                {Element}
               </FixedSizeList>
             )}
           </AutoSizer>
